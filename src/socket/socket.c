@@ -10,7 +10,7 @@
 #include "socket/socket.h"
 
 // A global vector to store our socket structures.
-vec_t(socket_t) sockets;
+vec_t(socket_t*) sockets;
 
 // A union to make switching between these types easier.
 typedef union
@@ -81,61 +81,15 @@ int DestroySockets(void)
 {
 		// Iterate over all our sockets and make sure they're closed
 		// so we don't leak file descriptors or memory.
-		socket_t socket; // Socket variable used for iteration of our type
+		socket_t *socket; // Socket variable used for iteration of our type
 		int i;           // 'i' for 'iterator' used to determine how many items we've iterated.
 		vec_foreach(&sockets, socket, i)
 		{
-				// Close the file descriptor
-				close(socket.fd);
-
-				// Free any memory used.
-				free(socket.host);
-				free(socket.ip);
+				DestroySocket(socket);
 		}
 
 		// Deallocate our global vector
 		vec_deinit(&sockets);
-}
-
-/*******************************************************************
- * Function: ResolveAddress                                        *
- *                                                                 *
- * Arguments:                                                      *
- * - (const char*) Strings containing the hostname and port to     *
- *   resolve                                                       *
- * - (struct addrinfo*) servinfo output                            *
- *                                                                 *
- * Returns: Creates a socket_t struct via args. Returns 1 (true)   *
- * if operation was successful or 0 (false) if not.                *
- *                                                                 *
- * Description: Resolves the hostname and port to an address usable*
- * to the operating system and this application allowing a data    *
- * connection to establish.                                        *
- *                                                                 *
- *******************************************************************/
-int ResolveAddress(const char *host, const char *port, socket_t *sock)
-{
-		// Make sure someone didn't biff and cause a crash.
-		assert(host && port && sock);
-
-		// Tell it what kind of socket(s) we want.
-		struct addrinfo hints;
-		struct addrinfo *servinfo;
-		servinfo = malloc(sizeof(struct addrinfo));
-		hints.ai_family = AF_INET;       // IPv4 socket
-		hints.ai_socktype = SOCK_STREAM; // Streaming socket.
-		// Resolve the addresses
-		int rv = 1;
-		rv = getaddrinfo(host, port, &hints, servinfo);
-		
-		// Check if there was an error and return a failure state.
-		if (rv != 0)
-				return 0;
-
-		// Include the address information struct into our socket struct.
-		sock->adr = servinfo;
-		// Everything worked!
-		return 1;
 }
 
 /*******************************************************************
@@ -153,16 +107,37 @@ int ResolveAddress(const char *host, const char *port, socket_t *sock)
  * before data may be sent or received.                            *
  *                                                                 *
  *******************************************************************/
-socket_t *CreateSocket(socket_t *sock)
+socket_t *CreateSocket(const char *host, const char *port)
 {
+		// Allocate the socket structure.
+		socket_t *sock = malloc(sizeof(socket_t));
+
+		// Tell it what kind of socket(s) we want.
+		struct addrinfo hints;
+		struct addrinfo *servinfo;
+		servinfo = malloc(sizeof(struct addrinfo));
+		hints.ai_family = AF_INET;       // IPv4 socket
+		hints.ai_socktype = SOCK_STREAM; // Streaming socket.
+		// Resolve the addresses
+		int rv = 1;
+		rv = getaddrinfo(host, port, &hints, servinfo);
+		
+		// Check if there was an error and return a failure state.
+		if (rv != 0)
+				return NULL;
+
+		// Include the address information struct into our socket struct.
+		sock->adr = servinfo;
+		sock->sa->sa = servinfo->ai_addr;
+
 		// call the UNIX socket() syscall to acquire a file descriptor.
 		// here, we create a IPv4 socket (AF_INET), tell it that we want
 		// a streaming socket with dynamic-length packets, and tell it
 		// that we're using TCP/IP
-		sock.fd  = socket(servinfo->ai_family, servinfo->ai_socktype, servinfo->ai_protocol);
+		sock->fd  = socket(sock->adr->ai_family, sock->adr->ai_socktype, sock->adr->ai_protocol);
 
 		// Check if the socket failed to be created.
-		if (sock.fd == -1)
+		if (sock->fd == -1)
 				return NULL;
 
 		// Add the socket to the vector.
@@ -185,7 +160,7 @@ socket_t *CreateSocket(socket_t *sock)
  * called then the read and write functions can be used.           *
  *                                                                 *
  *******************************************************************/
-int ConnectSocket(socket_t *sock, struct addrinfo *adrinfo)
+int ConnectSocket(socket_t *sock)
 {
 		// Make sure someone didn't biff.
 		assert(sock);
@@ -195,7 +170,7 @@ int ConnectSocket(socket_t *sock, struct addrinfo *adrinfo)
 
 		// Since some hostnames can resolve to multiple addresses (eg, Round-Robin DNS)
 		// this for-loop is required to iterate to one which works.
-		for (struct addrinfo *adr = adrinfo; adr; adr = adr->ai_next)
+		for (struct addrinfo *adr = sock->adr; adr; adr = adr->ai_next)
 		{
 				// Here we check if connect failed, if it did, print an error and continue
 				// otherwise we set the ConnectionSuccessful variable to indicate we can leave the loop.
@@ -222,9 +197,92 @@ int ConnectSocket(socket_t *sock, struct addrinfo *adrinfo)
 		return 1;
 }
 
+/*******************************************************************
+ * Function: DestroySocket                                         *
+ *                                                                 *
+ * Arguments: socket_t*                                            *
+ *                                                                 *
+ * Returns: (void) No return.                                      *
+ *                                                                 *
+ * Description: Destroys the socket structure safely and           *
+ * deallocates any resources used by the structure.                *
+ *                                                                 *
+ *******************************************************************/
 void DestroySocket(socket_t *sock)
 {
 		assert(sock);
 		
-		if ()
+		// Close the socket so we don't have an untracked file descriptors
+		close(sock->fd);
+
+		// Deallocate anything we allocated.
+		if (sock->adr)
+				freeaddrinfo(sock->adr);
+
+		if (sock->port)
+				free(port);
+
+		if (sock->host)
+				free(host);
+
+		// Finally, deallocate the socket structure itself.
+		free(sock);
+
+		// Remove it out of the vector.
+		vec_remove(&sockets, sock);
+}
+
+/*******************************************************************
+ * Function: ReadSocket                                            *
+ *                                                                 *
+ * Arguments: socket_t*, void*, size_t                             *
+ *                                                                 *
+ * Returns: (size_t) Returns the number of bytes read or -1 for an *
+ * error status from errno.                                        *
+ *                                                                 *
+ * Description: Reads data from a socket and fills the buffer,     *
+ * once the buffer is filled, it returns the number of bytes read  *
+ * from the socket or it returns -1 upon an error condition.       *
+ *                                                                 *
+ *******************************************************************/
+size_t ReadSocket(socket_t *sock, void *buffer, size_t bufferlen)
+{
+		assert(buffer && sock);
+
+		// Fill the buffer with bytes from the socket
+		size_t bytes = read(sock->fd, buffer, bufferlen);
+		// Check for errors
+		if (bytes == -1)
+				fprintf(stderr, "Failed to read bytes from socket %d: %s (%d)\n", sock->fd, strerror(errno), errno);
+
+		// Return the number of bytes, if bytes == -1 then we had an error and should
+		// handle accordingly in the functions which call this function.
+		return bytes;
+}
+
+/*******************************************************************
+ * Function: WriteSocket                                           *
+ *                                                                 *
+ * Arguments: socket_t*, const void*, size_t                       *
+ *                                                                 *
+ * Returns: (size_t) Returns the number of bytes written to the    *
+ * socket or -1 for an error condition.                            *
+ *                                                                 *
+ * Description: The inverse of the `ReadSocket` function in that   *
+ * it writes data to the socket. It returns -1 upon failure and    *
+ * returns the number of bytes written upon success.               *
+ *                                                                 *
+ *******************************************************************/
+size_t WriteSocket(socket_t *sock, const void *buffer, size_t bufferlen)
+{
+		assert(sock && buffer);
+
+		// Write the buffer out the socket and return how many bytes we
+		// wrote or any error codes if we had an error.
+		size_t bytes = send(sock->fd, buffer, bufferlen, 0);
+		// error check again
+		if (bytes == -1)
+				fprintf(stderr, "Failed to send bytes to socket %d: %s (%d)\n", sock->fd, strerror(errno), errno);
+
+		return bytes;
 }
