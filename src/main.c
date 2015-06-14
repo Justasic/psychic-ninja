@@ -11,5 +11,10 @@
 int main(int argc, char **argv)
 {
 	// Initialize the sockets
-	
+	InitializeSockets();
+
+
+	// Close out any sockets before we exit.
+	DestroySockets();
+	return EXIT_SUCCESS;
 }

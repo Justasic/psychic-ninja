@@ -13,4 +13,5 @@ typedef struct
 		
 		// Internal structures
 		sockaddr_t *sa; // The internal socket address structures.
+		struct addrinfo *adr; // The address info of the socket in binary form.
 } socket_t;

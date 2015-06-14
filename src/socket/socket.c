@@ -23,6 +23,27 @@ typedef union
 		struct sockaddr     sa;
 } sockaddr_t;
 
+static const char *GetIPAddress(struct addrinfo *adr)
+{
+		// Buffer big enough to read a human-readable IPv6 address (more than enough room for IPv4)
+		static char txt[INET6_ADDRSTRLEN];
+
+		// Clear the buffer to make sure it is completely empty from any previous IP address resolutions.
+		memset(txt, 0, sizeof(txt));
+
+		// call inet_ntop to convert the binary form of the address to the human-readable form.
+		if (!inet_ntop(adr->ai_family, adr->ai_addr, txt, sizeof(txt)))
+		{
+				// We had an issue, tell the user about it for debug-reasons.
+				fprintf(stderr, "Failed to convert ip address from binary to text: %s (%s)\n", strerror(errno), errno);
+				return NULL;
+		}
+
+		// We now have our text address
+		return txt;
+}
+
+
 /*******************************************************************
  * Function: InitializeSockets                                     *
  *                                                                 *
@@ -84,21 +105,23 @@ int DestroySockets(void)
  *   resolve                                                       *
  * - (struct addrinfo*) servinfo output                            *
  *                                                                 *
- * Returns: hints and servinfo filled structs via args. Returns    *
- * 1 (true) if operation was successful or 0 (false) if not.       *
+ * Returns: Creates a socket_t struct via args. Returns 1 (true)   *
+ * if operation was successful or 0 (false) if not.                *
  *                                                                 *
  * Description: Resolves the hostname and port to an address usable*
  * to the operating system and this application allowing a data    *
  * connection to establish.                                        *
  *                                                                 *
  *******************************************************************/
-void ResolveAddress(const char *host, const char *port, struct addrinfo *servinfo)
+int ResolveAddress(const char *host, const char *port, socket_t *sock)
 {
 		// Make sure someone didn't biff and cause a crash.
-		assert(host && port && servinfo);
+		assert(host && port && sock);
 
 		// Tell it what kind of socket(s) we want.
 		struct addrinfo hints;
+		struct addrinfo *servinfo;
+		servinfo = malloc(sizeof(struct addrinfo));
 		hints.ai_family = AF_INET;       // IPv4 socket
 		hints.ai_socktype = SOCK_STREAM; // Streaming socket.
 		// Resolve the addresses
@@ -109,6 +132,8 @@ void ResolveAddress(const char *host, const char *port, struct addrinfo *servinf
 		if (rv != 0)
 				return 0;
 
+		// Include the address information struct into our socket struct.
+		sock->adr = servinfo;
 		// Everything worked!
 		return 1;
 }
@@ -128,9 +153,8 @@ void ResolveAddress(const char *host, const char *port, struct addrinfo *servinf
  * before data may be sent or received.                            *
  *                                                                 *
  *******************************************************************/
-socket_t *CreateSocket(const struct addrinfo *servinfo)
+socket_t *CreateSocket(socket_t *sock)
 {
-		socket_t sock;
 		// call the UNIX socket() syscall to acquire a file descriptor.
 		// here, we create a IPv4 socket (AF_INET), tell it that we want
 		// a streaming socket with dynamic-length packets, and tell it
@@ -144,7 +168,63 @@ socket_t *CreateSocket(const struct addrinfo *servinfo)
 		// Add the socket to the vector.
 		vec_push(&sockets, sock);
 
-		// Normally we cannot do this because it's a function scope-local
-		// variable but because it's inserted into the vector, we're okay.
-		return &sock;
+		return sock;
+}
+
+/*******************************************************************
+ * Function: ConnectSocket                                         *
+ *                                                                 *
+ * Arguments: socket_t*                                            *
+ *                                                                 *
+ * Returns: (boolean) Attempts to connect to the resolved host for *
+ * the addresses provided and returns a boolean on whether it was  *
+ * successful or not.                                              *
+ *                                                                 *
+ * Description: Creates a connection to a socket so data can be    *
+ * transmitted over a connection. Once this function is successfully
+ * called then the read and write functions can be used.           *
+ *                                                                 *
+ *******************************************************************/
+int ConnectSocket(socket_t *sock, struct addrinfo *adrinfo)
+{
+		// Make sure someone didn't biff.
+		assert(sock);
+
+		// Check to make sure we connected to something.
+		int ConnectionSuccessful = 0;
+
+		// Since some hostnames can resolve to multiple addresses (eg, Round-Robin DNS)
+		// this for-loop is required to iterate to one which works.
+		for (struct addrinfo *adr = adrinfo; adr; adr = adr->ai_next)
+		{
+				// Here we check if connect failed, if it did, print an error and continue
+				// otherwise we set the ConnectionSuccessful variable to indicate we can leave the loop.
+				if (connect(sock->fd, adr->ai_addr, adr->ai_addrlen) == -1)
+				{
+						// Print to stderr instead of stdout for shell-routing reasons.
+						fprintf(stderr, "Connection to %s:%s was unsuccessful: %s (%s)\n", GetIPAddress(adr), sock->port, strerror(errno), errno);
+				}
+				else
+				{
+						// Our connection was a success, set the variable and break from the loop.
+						ConnectionSuccessful = 1;
+						break;
+				}
+		}
+
+		// Did we find a successful address to connect to?
+		if (!ConnectionSuccessful)
+		{
+				fprintf(stderr, "Failed to find an address to connect to successfully from host %s:%s\n", sock->host, sock->port);
+				return 0;
+		}
+
+		return 1;
+}
+
+void DestroySocket(socket_t *sock)
+{
+		assert(sock);
+		
+		if ()
 }
