@@ -1,10 +1,20 @@
 #pragma once
 #include <stdint.h> // For size_t
 #include <sys/types.h> // for struct addrinfo
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <netdb.h>
 
-// Forward-declare our sockaddr_t union, the linker
-// will resolve this reference later.
-typedef union sockaddr_t;
+// A union to make switching between these types easier.
+typedef union
+{
+		// IPv4 version of the sockaddr struct
+		struct sockaddr_in  sin;
+		// IPv6 version of the sockaddr struct
+		struct sockaddr_in6 sin6;
+		// Type-size compatible version
+		struct sockaddr     sa;
+} sockaddr_t;
 
 typedef struct
 {

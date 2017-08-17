@@ -4,6 +4,9 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <netdb.h>
+#include <assert.h>
+#include <errno.h>
+#include <arpa/inet.h>
 #include "vector/vec.h"
 
 // Include our socket types and function declarations.
@@ -11,17 +14,6 @@
 
 // A global vector to store our socket structures.
 vec_t(socket_t*) sockets;
-
-// A union to make switching between these types easier.
-typedef union
-{
-		// IPv4 version of the sockaddr struct
-		struct sockaddr_in  sin;
-		// IPv6 version of the sockaddr struct
-		struct sockaddr_in6 sin6;
-		// Type-size compatible version
-		struct sockaddr     sa;
-} sockaddr_t;
 
 static const char *GetIPAddress(struct addrinfo *adr)
 {
@@ -35,7 +27,7 @@ static const char *GetIPAddress(struct addrinfo *adr)
 		if (!inet_ntop(adr->ai_family, adr->ai_addr, txt, sizeof(txt)))
 		{
 				// We had an issue, tell the user about it for debug-reasons.
-				fprintf(stderr, "Failed to convert ip address from binary to text: %s (%s)\n", strerror(errno), errno);
+				fprintf(stderr, "Failed to convert ip address from binary to text: %s (%d)\n", strerror(errno), errno);
 				return NULL;
 		}
 
@@ -90,6 +82,7 @@ int DestroySockets(void)
 
 		// Deallocate our global vector
 		vec_deinit(&sockets);
+		return 1;
 }
 
 /*******************************************************************
@@ -120,7 +113,7 @@ socket_t *CreateSocket(const char *host, const char *port)
 		hints.ai_socktype = SOCK_STREAM; // Streaming socket.
 		// Resolve the addresses
 		int rv = 1;
-		rv = getaddrinfo(host, port, &hints, servinfo);
+		rv = getaddrinfo(host, port, &hints, &servinfo);
 		
 		// Check if there was an error and return a failure state.
 		if (rv != 0)
@@ -128,7 +121,7 @@ socket_t *CreateSocket(const char *host, const char *port)
 
 		// Include the address information struct into our socket struct.
 		sock->adr = servinfo;
-		sock->sa->sa = servinfo->ai_addr;
+		sock->sa->sa = *servinfo->ai_addr;
 
 		// call the UNIX socket() syscall to acquire a file descriptor.
 		// here, we create a IPv4 socket (AF_INET), tell it that we want
@@ -177,7 +170,7 @@ int ConnectSocket(socket_t *sock)
 				if (connect(sock->fd, adr->ai_addr, adr->ai_addrlen) == -1)
 				{
 						// Print to stderr instead of stdout for shell-routing reasons.
-						fprintf(stderr, "Connection to %s:%s was unsuccessful: %s (%s)\n", GetIPAddress(adr), sock->port, strerror(errno), errno);
+						fprintf(stderr, "Connection to %s:%hd was unsuccessful: %s (%d)\n", GetIPAddress(adr), sock->port, strerror(errno), errno);
 				}
 				else
 				{
@@ -190,7 +183,7 @@ int ConnectSocket(socket_t *sock)
 		// Did we find a successful address to connect to?
 		if (!ConnectionSuccessful)
 		{
-				fprintf(stderr, "Failed to find an address to connect to successfully from host %s:%s\n", sock->host, sock->port);
+				fprintf(stderr, "Failed to find an address to connect to successfully from host %s:%hd\n", sock->host, sock->port);
 				return 0;
 		}
 
@@ -219,11 +212,8 @@ void DestroySocket(socket_t *sock)
 		if (sock->adr)
 				freeaddrinfo(sock->adr);
 
-		if (sock->port)
-				free(port);
-
 		if (sock->host)
-				free(host);
+				free(sock->host);
 
 		// Finally, deallocate the socket structure itself.
 		free(sock);
@@ -252,7 +242,7 @@ size_t ReadSocket(socket_t *sock, void *buffer, size_t bufferlen)
 		// Fill the buffer with bytes from the socket
 		size_t bytes = read(sock->fd, buffer, bufferlen);
 		// Check for errors
-		if (bytes == -1)
+		if (bytes == -1UL)
 				fprintf(stderr, "Failed to read bytes from socket %d: %s (%d)\n", sock->fd, strerror(errno), errno);
 
 		// Return the number of bytes, if bytes == -1 then we had an error and should
@@ -281,7 +271,7 @@ size_t WriteSocket(socket_t *sock, const void *buffer, size_t bufferlen)
 		// wrote or any error codes if we had an error.
 		size_t bytes = send(sock->fd, buffer, bufferlen, 0);
 		// error check again
-		if (bytes == -1)
+		if (bytes == -1UL)
 				fprintf(stderr, "Failed to send bytes to socket %d: %s (%d)\n", sock->fd, strerror(errno), errno);
 
 		return bytes;
